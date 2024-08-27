@@ -5,7 +5,6 @@ import asyncio
 from functools import partial
 from datetime import datetime, timedelta
 import configparser
-from datetime import datetime
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, ApplicationBuilder
 from telegram.error import BadRequest
@@ -39,7 +38,6 @@ TIMEZONE = "МСК"
 
 TOKEN = ""
 bot = Bot(TOKEN)
-application = ApplicationBuilder().token(TOKEN).build()
 
 # Функция, которая будет выполняться при команде /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -57,9 +55,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "       Системные команды\n"
         "/config - Показать настройки конфигурации\n"
         "/getgroupid - Получить и сохранить ID группы\n"
-        "/reloadconfig - Обновить информацию из файла config.ini"
+        "/reloadconfig - Обновить информацию из файла config.ini\n\n"
         
-        "       Ежедневное оповещение ✅\n"
+        "    Ежедневное оповещение ✅\n"
         "/notify - Отправить уведомление о статусе резервных копий\n\n"
         "Бот ежедневно отправляет уведомления о статусе резервных копий, приоритет мониторинга в наличии бэкапов на конец предыдущего рабочего дня клиента. Соответственно, бэкапы проверяются начиная с 15:00 предыдущего дня."
     )
@@ -67,9 +65,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(message)
     else:
         logger.error("No message in update")
-
-async def scheduled_notify_backup_status(context: ContextTypes.DEFAULT_TYPE) -> None:
-    await notify_backup_status(context)
     
 # Асинхронная функция для обработки команды /reloadconfig
 async def reload_config_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -17,7 +17,7 @@ def read_backup_path(BACKUP_PATH_FILE, logger):
         return None
 
 # Функция для парсинга имени файла бэкапа
-# Обновление шаблона от 24.06.2024 "SERVER-DATABASE_dd-mm-yyyy_hh_nn_ss"
+# Обновление шаблона от 24.06.2024 "SERVER-DATABASE_dd-mm-yyyy_hh_nn_ss.zip"
 def parse_backup_filename(filename):
     pattern = r'^(?P<servername>[^-]+)-(?P<dbname>[^-]+)_(?P<date>\d{2}-\d{2}-\d{4})_(?P<time>\d{2}_\d{2}_\d{2})\.zip$' # SERVER-DATABASE_dd-mm-yyyy_hh_nn_ss
     match = re.match(pattern, filename)
@@ -34,11 +34,17 @@ def parse_backup_filename(filename):
 def get_latest_backups(backup_root_path, SERVER_LIST_ALLOWED, SERVER_LIST_DISALLOWED):
     backup_info = {}
 
+    # Обрабатываем каждый сервер в корневой папке бэкапов
     for servername in os.listdir(backup_root_path):
+        # Пропускаем сервера, которые не разрешены или запрещены для мониторинга
         if servername in SERVER_LIST_DISALLOWED or (SERVER_LIST_ALLOWED and servername not in SERVER_LIST_ALLOWED):
             continue
+
         server_path = os.path.join(backup_root_path, servername)
         if os.path.isdir(server_path):
+            found_backup = False  # Флаг для отслеживания наличия бэкапов для текущего сервера
+
+            # Проходим по всем файлам в директории сервера
             for root, dirs, files in os.walk(server_path):
                 for backup in files:
                     backup_path = os.path.join(root, backup)
@@ -53,8 +59,27 @@ def get_latest_backups(backup_root_path, SERVER_LIST_ALLOWED, SERVER_LIST_DISALL
                                 'datetime': backup_datetime,
                                 'date': info['date'],
                             }
+                        found_backup = True  # Устанавливаем флаг, если нашли хотя бы один бэкап
+
+            # Если для текущего сервера не было найдено ни одного бэкапа
+            if not found_backup:
+                backup_info[(servername, None)] = {
+                    'filename': None,
+                    'datetime': None,
+                    'date': None,
+                }
+
+    # Добавляем информацию для серверов из SERVER_LIST_ALLOWED, для которых не найдено ни одного бэкапа
+    for servername in SERVER_LIST_ALLOWED:
+        if not any(key[0] == servername for key in backup_info.keys()):
+            backup_info[(servername, None)] = {
+                'filename': None,
+                'datetime': None,
+                'date': None,
+            }
 
     return backup_info
+
 
 # Функция для получения информации о бэкапах за сегодня
 def get_today_backups(backup_root_path, SERVER_LIST_ALLOWED, SERVER_LIST_DISALLOWED):
@@ -102,27 +127,28 @@ def get_backup_history(backup_root_path, servername):
 
 # Функция для форматирования статуса бэкапа
 def format_backup_status(servername, dbname, datetime, timezone):
-    date_str = datetime.strftime('%d.%m.%Y %H:%M:%S')
-    return f"{servername:<15} | БД: {dbname:<20} | {date_str}"
+    if datetime is not None:
+        date_str = datetime.strftime('%d.%m.%Y %H:%M:%S')
+    else:
+        date_str = "НЕТ"
+    return f"{servername:<15} | БД: {dbname if dbname else 'Неизвестно':<20} | {date_str}"
+
 
 # Функция для форматирования статуса бэкапа (мобильная версия)
 def format_backup_status_mobile(servername, dbname, datetime):
-    date_str = datetime.strftime('%d.%m.%Y')
-    return f"{servername[:10]:<10}|{dbname[:10]:<10}|{date_str}"
+    if datetime is not None:
+        date_str = datetime.strftime('%d.%m.%Y')
+    else:
+        date_str = "НЕТ"
+    return f"{servername[:10]:<10}|{dbname if dbname else 'Неизвестно'[:10]:<10}|{date_str}"
 
-# Асинхронная функция для обработки команды /notify
-async def notify_backup_command(update, context, BACKUP_PATH_FILE, SERVER_LIST_ALLOWED, SERVER_LIST_DISALLOWED, logger):
-    path = read_backup_path(BACKUP_PATH_FILE, logger)
-
-    if not path:
-        await update.message.reply_text('Путь к бэкапам не установлен. Используйте команду /pathbackup для установки пути.')
-        return
-
+# Функция для обработки резервных копий и генерации сообщения
+def generate_backup_message(path, SERVER_LIST_ALLOWED, SERVER_LIST_DISALLOWED, logger):
     now = datetime.now()
     start_time = datetime.combine(now.date(), datetime.min.time()).replace(hour=15) - timedelta(days=1)
-    
+
     def is_recent_backup(backup_datetime):
-        return start_time <= backup_datetime <= now
+         return backup_datetime is not None and start_time <= backup_datetime <= now
 
     today_backups = get_latest_backups(path, SERVER_LIST_ALLOWED, SERVER_LIST_DISALLOWED)
     recent_backups = {key: info for key, info in today_backups.items() if is_recent_backup(info['datetime'])}
@@ -134,15 +160,29 @@ async def notify_backup_command(update, context, BACKUP_PATH_FILE, SERVER_LIST_A
             recent_info = recent_backups[(servername, dbname)]
             message += f"{servername:<15} | БД: {dbname:<20} | {recent_info['datetime'].strftime('%d.%m.%Y %H:%M:%S')}\n"
         else:
-            message += f"{servername:<15} | БД: {dbname:<20} | НЕТ\n"
+            message += f"{servername:<15} | БД: {dbname if dbname else 'Неизвестно':<20} | НЕТ\n"
             all_backups_present = False
     message += '```'
 
     if all_backups_present:
-        message = '✅✅✅ **SUCCESS** ✅✅✅\n' + message
+        message = '✅📂🔒 Резервное копирование успешно. Работа системы продолжается без сбоев.\n' + message
     else:
-        message = '❌❌❌ **WARNING** ❌❌❌\n' + message
+        message = '❌📂⚠️ Выявлены ошибки при выполнении резервного копирования.\n' + message
+    
+    # Экранирование символов для MarkdownV2
+    message = message.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('-', '\\-').replace('|', '\\|').replace('.', '\\.')
+    
+    return message
 
+# Асинхронная функция для обработки команды /notify
+async def notify_backup_command(update, context, BACKUP_PATH_FILE, SERVER_LIST_ALLOWED, SERVER_LIST_DISALLOWED, logger):
+    path = read_backup_path(BACKUP_PATH_FILE, logger)
+
+    if not path:
+        await update.message.reply_text('Путь к бэкапам не установлен. Используйте команду /pathbackup для установки пути.')
+        return
+
+    message = generate_backup_message(path, SERVER_LIST_ALLOWED, SERVER_LIST_DISALLOWED, logger)
     await update.message.reply_text(message, parse_mode='MarkdownV2')
 
 # Асинхронная функция для уведомлений по расписанию
@@ -153,34 +193,9 @@ async def notify_backup_status(context, BACKUP_PATH_FILE, SERVER_LIST_ALLOWED, S
         await context['application'].bot.send_message(CHAT_ID, 'Путь к бэкапам не установлен. Используйте команду /pathbackup для установки пути.')
         return
 
-    now = datetime.now()
-    start_time = datetime.combine(now.date(), datetime.min.time()).replace(hour=15) - timedelta(days=1)
-    
-    def is_recent_backup(backup_datetime):
-        return start_time <= backup_datetime <= now
-
-    today_backups = get_latest_backups(path, SERVER_LIST_ALLOWED, SERVER_LIST_DISALLOWED)
-    recent_backups = {key: info for key, info in today_backups.items() if is_recent_backup(info['datetime'])}
-
-    all_backups_present = True
-    message = '```\n'
-    for (servername, dbname), info in today_backups.items():
-        if (servername, dbname) in recent_backups:
-            recent_info = recent_backups[(servername, dbname)]
-            message += f"{servername:<15} | БД: {dbname:<20} | {recent_info['datetime'].strftime('%d.%m.%Y %H:%M:%S')}\n"
-        else:
-            message += f"{servername:<15} | БД: {dbname:<20} | НЕТ\n"
-            all_backups_present = False
-    message += '```'
-
-    if all_backups_present:
-        message = '✅✅✅ ДОБРОЕ УТРО ✅✅✅\n' + message
-    else:
-        message = '❌❌❌ WARNING ❌❌❌\n' + message
-
-    message = message.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('(', '\\(').replace(')', '\\)').replace('-', '\\-').replace('|', '\\|').replace('.', '\\.')
-
+    message = generate_backup_message(path, SERVER_LIST_ALLOWED, SERVER_LIST_DISALLOWED, logger)
     await context['application'].bot.send_message(CHAT_ID, message, parse_mode='MarkdownV2')
+
 
 # Асинхронная функция для проверки бэкапов за сегодня (мобильная версия)
 async def mtoday_backup_status(update, context, BACKUP_PATH_FILE, SERVER_LIST_ALLOWED, SERVER_LIST_DISALLOWED, logger):
@@ -199,7 +214,7 @@ async def mtoday_backup_status(update, context, BACKUP_PATH_FILE, SERVER_LIST_AL
             today_info = today_backups[(servername, dbname)]
             message += format_backup_status_mobile(servername, dbname, today_info['datetime']) + '\n'
         else:
-            message += f"{servername[:10]:<10}|{dbname[:10]:<10}|НЕТ\n"
+            message += f"{servername[:10]:<10}|{dbname if dbname else 'Неизвестно'[:10]:<10}|НЕТ\n"
     message += '```'
 
     await update.message.reply_text(message, parse_mode='Markdown')
@@ -264,7 +279,7 @@ async def today_backup_status(update, context, BACKUP_PATH_FILE, SERVER_LIST_ALL
             today_info = today_backups[(servername, dbname)]
             message += format_backup_status(servername, dbname, today_info['datetime'], TIMEZONE) + '\n'
         else:
-            message += f"{servername:<15} | БД: {dbname:<20} | КОПИЯ ОТСУТСТВУЕТ\n"
+            message += f"{servername:<15} | БД: {dbname if dbname else 'Неизвестно':<20} | КОПИЯ ОТСУТСТВУЕТ\n"
     message += '```'
 
     await update.message.reply_text(message, parse_mode='Markdown')
